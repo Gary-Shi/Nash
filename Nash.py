@@ -2,6 +2,8 @@ import numpy as np
 import os
 import copy
 
+from docplex.mp.model import Model
+
 def mul(a):
 
     b = 1
@@ -28,7 +30,7 @@ class Game:
 
         sum = mul(n_action)
         print(sum)
-        with open('Game.game', 'r') as f:
+        with open('Game.txt', 'r') as f:
 
             while 1:
 
@@ -80,8 +82,9 @@ def count(x):
 def generate_set(n, m):
 
     b = []
-    for i in range(1,n):
-        if count(i) == m and (i | n) == n:b.append(i)
+    for i in range(1, n):
+        if count(i) == m and (i | n) == n:
+            b.append(i)
     return b
 
 def generate_action(s):
@@ -89,7 +92,8 @@ def generate_action(s):
     b = []
     i = 0
     while (1<<i) <= s:
-        if (1<<i) & s:b.append(i)
+        if (1<<i) & s:
+            b.append(i)
         i += 1
     return b
 
@@ -101,18 +105,74 @@ def dominated(game, i, a, A):
             cnt = 0
             for aa in l_a[1-i]:
                 if i == 0:
-                    if game.reward[ap][aa][i] > game.reward[a][aa][i]:cnt += 1
-                    else:break
+                    if game.reward[ap][aa][i] > game.reward[a][aa][i]:
+                        cnt += 1
+                    else:
+                        break
                 else:
-                    if game.reward[aa][ap][i] > game.reward[aa][a][i]:cnt += 1
-                    else:break
+                    if game.reward[aa][ap][i] > game.reward[aa][a][i]:
+                        cnt += 1
+                    else:
+                        break
 
             if cnt == len(l_a[1-i]):return True
     return False
 
 def LP(game, s1, s2):
 
-    return False
+    # which actions are valid?
+    valid_action_1 = generate_action(s1)
+    valid_action_2 = generate_action(s2)
+
+    # create a model
+    model = Model("Nash_Equilibrium")
+
+    # define variables
+    ne_value = model.continuous_var_list(2, lb=-model.infinity)
+    action_1 = model.continuous_var_list(game.n_action[0], lb=0, ub=1)
+    action_2 = model.continuous_var_list(game.n_action[1], lb=0, ub=1)
+
+    # add constraints
+
+    # constraint 1: sum of probs equals to 1
+    model.add_constraint(model.sum(action_1) == 1)
+    model.add_constraint(model.sum(action_2) == 1)
+
+    # constraint 2: invalid actions have prob of 0
+    for i in range(game.n_action[0]):
+        if i not in valid_action_1:
+            model.add_constraint(action_1[i] == 0)
+
+    for i in range(game.n_action[1]):
+        if i not in valid_action_2:
+            model.add_constraint(action_2[i] == 0)
+
+    # constraint 3: each player can achieve Nash Equilibrium value
+    for i in range(game.n_action[0]):
+        if i in valid_action_1:
+            model.add_constraint(model.scal_prod(action_2, game.reward[i, :, 0]) == ne_value[0])
+
+    for j in range(game.n_action[1]):
+        if j in valid_action_2:
+            model.add_constraint(model.scal_prod(action_1, game.reward[:, j, 1]) == ne_value[1])
+
+    # constraint 4: any invalid action is suboptimal
+    for i in range(game.n_action[0]):
+        if i not in valid_action_1:
+            model.add_constraint(model.scal_prod(action_2, game.reward[i, :, 0]) <= ne_value[0])
+
+    for j in range(game.n_action[1]):
+        if j not in valid_action_2:
+            model.add_constraint(model.scal_prod(action_1, game.reward[:, j, 1]) <= ne_value[1])
+
+    solution = model.solve()
+
+    if solution == None:
+        return False
+    else:
+        game.result = solution[ne_value]
+        return True
+
 
 def find_nash_equilibrium(game):
 
@@ -126,13 +186,15 @@ def find_nash_equilibrium(game):
             for s in S1:
                 A2 = 0
                 for i in range(game.n_action[1]):
-                    if not dominated(game, 1, i, (s, (1<<game.n_action[1]) - 1)):A2 += 1<<i
+                    if not dominated(game, 1, i, (s, (1<<game.n_action[1]) - 1)):
+                        A2 += 1<<i
                 flag = False
                 for a_s in generate_action(s):
                     if dominated(game, 0, a_s, (s, A2)):
                         flag = True
                         break
-                if flag:continue
+                if flag:
+                    continue
                 S2 = generate_set(A2, t[1])
                 for s2 in S2:
                     flag = False
@@ -140,8 +202,12 @@ def find_nash_equilibrium(game):
                         if dominated(game, 0, a_s, (s, s2)):
                             flag = True
                             break
-                    if flag:continue
-                    if LP(game, s, s2):return True
+                    if flag:
+                        continue
+                    if LP(game, s, s2):
+                        return True
+
+        return False
 
 
 def main():
