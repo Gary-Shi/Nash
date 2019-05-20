@@ -99,6 +99,7 @@ def generate_action(s):
 
 def dominated(game, i, a, A):
     
+    
     l_a = [generate_action(A[0]), generate_action(A[1])]
     for ap in l_a[i]:
         if ap != a:
@@ -170,7 +171,8 @@ def LP(game, s1, s2):
     if solution == None:
         return False
     else:
-        game.result = solution[ne_value]
+        game.result.append(solution[ne_value[0]])
+        game.result.append(solution[ne_value[1]])
         return True
 
 
