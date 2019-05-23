@@ -1,8 +1,11 @@
 import numpy as np
 import os
 import copy
-
+import time
 from docplex.mp.model import Model
+
+global tt
+tt = 0
 
 def mul(a):
 
@@ -24,7 +27,7 @@ class Game:
         shape.append(n_agent)
         
         self.reward = np.empty(mul(shape))
-        cmd_string ="java -jar gamut.jar "+ cmd_string +" -f Game.game"
+        cmd_string ="java -jar gamut.jar "+ cmd_string +" -f Game.txt"
         os.system(cmd_string)
 
 
@@ -60,7 +63,8 @@ class Game:
 def temp(x):
 
     xx = abs(x[0] - x[1])
-    return xx * 1000000 + x[0] + x[1];
+    yy = x[0] + x[1]
+    return xx  + yy * 1000000
 
 def generate_pair(n_action):
 
@@ -79,10 +83,45 @@ def count(x):
         x >>= 1
     return cnt
 
+global cnt,b,c
+
+def dfs(num, pos, now, n):
+    global b,c,cnt
+    if num == n:
+        b.append(now)
+        return
+    if pos == len(cnt) or num + cnt[pos] < n:return
+    for i in range(pos, len(cnt)):
+        if c[i]:
+            dfs(num+1, i+1, now | (1<<i), n)
+
 def generate_set(n, m):
 
+
+    n,m = m,n
+    if m == 0:return []
+    
+    global b,c,cnt
+    c   = [m&1]
     b = []
-    for i in range(1, n):
+
+    i = 1
+    while 1:
+        if (1<<i) > m:break
+        if m & (1<<i):c.append(1)
+        else:c.append(0)
+        i += 1
+
+    cnt = copy.deepcopy(c)
+    for i in range(len(cnt)-2,-1,-1):
+        cnt[i] += cnt[i+1]
+
+    dfs(0,0,0,n)
+    return b
+
+#    print('g_set',n,m)
+    b = []
+    for i in range(1, n + 1):
         if count(i) == m and (i | n) == n:
             b.append(i)
     return b
@@ -91,16 +130,44 @@ def generate_action(s):
 
     b = []
     i = 0
-    while (1<<i) <= s:
-        if (1<<i) & s:
+    while s:
+        if s & 1:
             b.append(i)
         i += 1
+        s >>= 1
     return b
 
-def dominated(game, i, a, A):
-    
-    
+
+def init(game):
+
+    surpass = [[[0 for i in range(game.n_action[0])] for j in range(game.n_action[0])],[[0 for i in range(game.n_action[1])] for j in range(game.n_action[1])]]
+    for a in range(game.n_action[0]):
+        for a2 in range(game.n_action[0]): # a over a2
+            if a is not a2:
+                cnt = 0
+                for k in range(game.n_action[1]):
+                    if game.reward[a][k][0] > game.reward[a2][k][0]:cnt += 1<<k
+                surpass[0][a][a2] = cnt
+
+    for a in range(game.n_action[1]):
+        for a2 in range(game.n_action[1]): # a over a2
+            if a is not a2:
+                cnt = 0
+                for k in range(game.n_action[0]):
+                    if game.reward[k][a][1] > game.reward[k][a2][1]:cnt += 1<<k
+                surpass[1][a][a2] = cnt
+
+    return surpass
+
+
+def dominated(game, i, a, A, surpass):
+
     l_a = [generate_action(A[0]), generate_action(A[1])]
+    '''for ap in l_a[i]:
+        if ap != a:
+            if (surpass[i][ap][a] & A[1-i]) == A[1-i]:return True
+    return False'''
+
     for ap in l_a[i]:
         if ap != a:
             cnt = 0
@@ -117,10 +184,13 @@ def dominated(game, i, a, A):
                         break
 
             if cnt == len(l_a[1-i]):return True
+#    print('succeed')
     return False
 
 def LP(game, s1, s2):
-
+    global tt
+    tt -= time.time()
+    print('test',s1,s2)
     # which actions are valid?
     valid_action_1 = generate_action(s1)
     valid_action_2 = generate_action(s2)
@@ -167,12 +237,13 @@ def LP(game, s1, s2):
             model.add_constraint(model.scal_prod(action_1, game.reward[:, j, 1]) <= ne_value[1])
 
     solution = model.solve()
-
+    tt += time.time()
     if solution == None:
         return False
     else:
         game.result.append(solution[ne_value[0]])
         game.result.append(solution[ne_value[1]])
+        print('find ',s1,s2)
         return True
 
 
@@ -180,32 +251,38 @@ def find_nash_equilibrium(game):
 
     if game.n_agent == 2:
 
+        surpass = init(game)
         a = generate_pair(game.n_action)
         print(a)
         for t in a:
+            print('        test', t)
             A1 = (1<<game.n_action[0])-1
             S1 = generate_set(A1, t[0])
+            #print("S1",S1)
             for s in S1:
                 A2 = 0
                 for i in range(game.n_action[1]):
-                    if not dominated(game, 1, i, (s, (1<<game.n_action[1]) - 1)):
+                    if not dominated(game, 1, i, (s, (1<<game.n_action[1]) - 1), surpass):
                         A2 += 1<<i
                 flag = False
-                for a_s in generate_action(s):
-                    if dominated(game, 0, a_s, (s, A2)):
+                l_a_s = generate_action(s)
+                for a_s in l_a_s:
+                    if dominated(game, 0, a_s, (s, A2), surpass):
                         flag = True
                         break
                 if flag:
                     continue
                 S2 = generate_set(A2, t[1])
                 for s2 in S2:
-                    flag = False
-                    for a_s in generate_action(s):
-                        if dominated(game, 0, a_s, (s, s2)):
-                            flag = True
+                    flag2 = False
+                    l2_a_s = generate_action(s)
+                    for a2_s in l2_a_s:
+                        if dominated(game, 0, a2_s, (s, s2), surpass):
+                            flag2 = True
                             break
-                    if flag:
+                    if flag2:
                         continue
+                    #print('LP',s,s2)
                     if LP(game, s, s2):
                         return True
 
@@ -213,12 +290,15 @@ def find_nash_equilibrium(game):
 
 
 def main():
-
-    game = Game(2, [2,3], "-g RandomGame -players 2 -normalize -min_payoff 0 -max_payoff 1 -f BoS.game -actions 2 3")
+    #1558352788079
+    action = [15,15]
+    game = Game(2, action, "-random_seed 34253654 -g RandomGame -players 2 -normalize -min_payoff 0 -max_payoff 1 -f BoS.game -actions "+str(action[0])+' '+str(action[1]))
+    init(game)
+    start_time = time.time()
     if find_nash_equilibrium(game):
         print('success!', game.result)
     else:
         print('failed!')
-
+    print(time.time() - start_time, ttx)
 
 main()
